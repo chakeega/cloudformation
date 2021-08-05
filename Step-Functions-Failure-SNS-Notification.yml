@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template sends an SNS notification if any of the statemachines in an account fail
+Parameters:
+  EmailSubscriptionAddress:
+    Type: String
+    Description: The email address you want to subscribe to the topic
+
+  KMSKeyAdministratorRoleARN:
+    Type: String
+    Description: The ARN of the role that you want to administer the SNS Topic KMS Key
+
+Resources: 
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      DisplayName: Step Function Failures
+      KmsMasterKeyId: !Ref SNSKMSKey
+      Subscription: 
+        - Endpoint: !Ref EmailSubscriptionAddress
+          Protocol: email
+      TopicName: Stepfunction-failures-topic
+
+  SNSKMSKey:
+    Type: AWS::KMS::Key
+    Properties: 
+      Description: KMS key to protect SNS topics
+      Enabled: true
+      EnableKeyRotation: true
+      KeyUsage: ENCRYPT_DECRYPT
+      PendingWindowInDays: 7
+      KeyPolicy:
+        Statement:
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !Ref KMSKeyAdministratorRoleARN
+            Action:
+              - kms:Create*
+              - kms:Describe*
+              - kms:Enable*
+              - kms:List*
+              - kms:Put*
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+            Resource: '*'
+          - Sid: Allow Customisation Lambda to use Key 
+            Effect: Allow
+            Principal: 
+              AWS: !GetAtt LambdaRole.Arn
+            Action: 
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey
+            Resource: '*'
+
+  EventRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "EventRule"
+      EventPattern:
+        source: 
+          - "aws.states"
+        detail-type: 
+          - "Step Functions Execution Status Change"
+        detail: 
+          status: #alternates are RUNNING and SUCCEEDED
+            - "FAILED"
+            - "TIMED_OUT"
+      State: ENABLED
+      Targets: 
+        - Arn: !GetAtt SNSCustomisationLambda.Arn
+          Id: '1'
+          
+  EventTopicPolicy:
+    Type: 'AWS::SNS::TopicPolicy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - events.amazonaws.com
+                - lambda.amazonaws.com
+            Action: 'sns:Publish'
+            Resource: '*'
+      Topics:
+        - !Ref SNSTopic
+
+  SNSCustomisationLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Lambda function to customise SNS notifications 
+      Code:
+        ZipFile: !Sub 
+        - |
+          import boto3
+          def handler(event, context):
+              print(event)
+              state_machine_arn = event['detail']['stateMachineArn']
+              state_machine_name = state_machine_arn[state_machine_arn.rfind(':')+1:]
+              subject = f"{state_machine_name} has failed"
+              message = f"Failure CloudWatch Event:\n{event}"
+
+              client = boto3.client('sns')
+              response = client.publish(
+                  TargetArn="${SNSTopic}",
+                  Message=message,
+                  MessageStructure='text',
+                  Subject=subject,
+              )
+        - {SNSTopic: !Ref SNSTopic}
+
+      FunctionName: SNS-Customistion-Lambda-Function
+      Role: !GetAtt LambdaRole.Arn
+      Runtime: python3.7
+      Handler: index.handler
+      Timeout: 7 #seconds
+
+  LambdaExecutionPolicy:
+    Type: AWS::IAM::Policy
+    Properties: 
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Action: 
+          - logs:*
+          Resource: arn:aws:logs:*:*:*
+        - Effect: Allow
+          Action: 'sns:Publish'
+          Resource: !Ref SNSTopic
+      PolicyName: SNS-Customisation-Lambda-Policy
+      Roles: 
+        - !Ref LambdaRole
+
+  CloudWatchInvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties: 
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SNSCustomisationLambda
+      Principal: events.amazonaws.com
+      # SourceArn: !Ref EventTopicPolicy
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: SNS-Customisation-Lambda-Role
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaENIManagementAccess
