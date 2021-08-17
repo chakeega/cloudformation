@@ -6,7 +6,7 @@ filecount = 0
 
 def get_file_names():
     global filecount
-    s3_bucket = ""
+    s3_bucket = "<ADD YOUR GLOBAL BUCKET NAME HERE>"
     files = os.listdir()
     files.remove(os.path.basename(__file__))
 

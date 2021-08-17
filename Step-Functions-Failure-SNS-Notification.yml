@@ -3,10 +3,12 @@ Description: This template sends an SNS notification if any of the statemachines
 Parameters:
   EmailSubscriptionAddress:
     Type: String
+    Default: aws-dash@amazon.com
     Description: The email address you want to subscribe to the topic
 
   KMSKeyAdministratorRoleARN:
     Type: String
+    Default: arn:aws:iam::815423538953:role/admin
     Description: The ARN of the role that you want to administer the SNS Topic KMS Key
 
 Resources: 
@@ -160,3 +162,5 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaENIManagementAccess
+
+# Outputs:
